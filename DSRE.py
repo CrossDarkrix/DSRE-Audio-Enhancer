@@ -198,7 +198,7 @@ class DSREWorker(QtCore.QThread):
 
             try:
                 # 读取
-                self.sig_log.emit(f"正在加载：{in_path}")
+                self.sig_log.emit(f"ロード中：{in_path}")
                 y, sr = librosa.load(in_path, mono=False, sr=None)
 
                 # 对齐为 (ch, n)
@@ -241,7 +241,7 @@ class DSREWorker(QtCore.QThread):
             except Exception as e:
                 err = "".join(traceback.format_exception_only(type(e), e)).strip()
                 self.sig_error.emit(fname, err)
-                self.sig_log.emit(f"[错误] {fname}: {err}")
+                self.sig_log.emit(f"[Error] {fname}: {err}")
 
             done += 1
             self.sig_overall_progress.emit(done, total)
@@ -253,7 +253,7 @@ class DSREWorker(QtCore.QThread):
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DSRE v1.1.250908_beta")
+        self.setWindowTitle("DSRE v1.1.250908_beta(Japanese Translated)")
 
         # 获取相对路径的图标
         icon_path = os.path.join(os.path.dirname(__file__), "logo.ico")
@@ -263,9 +263,9 @@ class MainWindow(QtWidgets.QWidget):
 
         # 文件列表
         self.list_files = QtWidgets.QListWidget()
-        self.btn_add = QtWidgets.QPushButton("添加输入文件")
-        self.btn_clear = QtWidgets.QPushButton("清空输入列表")
-        self.btn_outdir = QtWidgets.QPushButton("选择输出目录")
+        self.btn_add = QtWidgets.QPushButton("入力ファイルを追加する")
+        self.btn_clear = QtWidgets.QPushButton("入力リストをクリアする")
+        self.btn_outdir = QtWidgets.QPushButton("出力ディレクトリを選択してください")
         self.le_outdir = QtWidgets.QLineEdit()
         self.le_outdir.setPlaceholderText("Output folder")
         self.le_outdir.setText(os.path.abspath("output"))
@@ -295,11 +295,11 @@ class MainWindow(QtWidgets.QWidget):
         # 进度
         self.pb_file = QtWidgets.QProgressBar()    # 单文件进度
         self.pb_all = QtWidgets.QProgressBar()     # 全部进度
-        self.lbl_now = QtWidgets.QLabel("控制")
+        self.lbl_now = QtWidgets.QLabel("コントロール")
 
         # 控制按钮
-        self.btn_start = QtWidgets.QPushButton("开始处理")
-        self.btn_cancel = QtWidgets.QPushButton("取消处理")
+        self.btn_start = QtWidgets.QPushButton("開始")
+        self.btn_cancel = QtWidgets.QPushButton("停止")
         self.btn_cancel.setEnabled(False)
 
         # 日志
@@ -311,7 +311,7 @@ class MainWindow(QtWidgets.QWidget):
 
         # === 左列：输入文件 ===
         vleft = QtWidgets.QVBoxLayout()
-        lbl_files = QtWidgets.QLabel("输入文件")
+        lbl_files = QtWidgets.QLabel("入力ファイル")
         lbl_files.setAlignment(QtCore.Qt.AlignHCenter)
         vleft.addWidget(lbl_files)
         vleft.addWidget(self.list_files)
@@ -327,7 +327,7 @@ class MainWindow(QtWidgets.QWidget):
         vbtn.addWidget(self.btn_add)
         vbtn.addWidget(self.btn_clear)
         vbtn.addSpacing(10)
-        vbtn.addWidget(QtWidgets.QLabel("输出目录"))
+        vbtn.addWidget(QtWidgets.QLabel("出力場所"))
         vbtn.addWidget(self.le_outdir)
         vbtn.addWidget(self.btn_outdir)
         vbtn.addSpacing(20)
@@ -342,7 +342,7 @@ class MainWindow(QtWidgets.QWidget):
         # 输出格式选择
         self.cb_format = QtWidgets.QComboBox()
         self.cb_format.addItems(["ALAC", "FLAC"])  # 两种可选格式
-        vbtn.addWidget(QtWidgets.QLabel("输出编码格式"))
+        vbtn.addWidget(QtWidgets.QLabel("出力Encode形式"))
         vbtn.addWidget(self.cb_format)
 
         vmid.addLayout(vbtn)
@@ -350,32 +350,32 @@ class MainWindow(QtWidgets.QWidget):
 
         # === 右列：参数设置 + 进度 ===
         vright = QtWidgets.QVBoxLayout()
-        lbl_params = QtWidgets.QLabel("参数设置")
+        lbl_params = QtWidgets.QLabel("パラメータ設定")
         lbl_params.setAlignment(QtCore.Qt.AlignHCenter)
         vright.addWidget(lbl_params)
 
         form = QtWidgets.QFormLayout()
-        form.addRow("调制次数:", self.sb_m)
-        form.addRow("衰减幅度:", self.dsb_decay)
-        form.addRow("预处理高通滤波器截止频率（Hz）:", self.sb_pre)
-        form.addRow("后处理高通滤波器截止频率（Hz）:", self.sb_post)
-        form.addRow("滤波器阶数:", self.sb_order)
-        form.addRow("目标采样率（Hz）:", self.sb_sr)
+        form.addRow("変調数:", self.sb_m)
+        form.addRow("減衰振幅:", self.dsb_decay)
+        form.addRow("前処理のハイパスフィルタのカットオフ周波数（Hz）:", self.sb_pre)
+        form.addRow("後処理のハイパスフィルタのカットオフ周波数（Hz）:", self.sb_post)
+        form.addRow("フィルターの順序:", self.sb_order)
+        form.addRow("ターゲットサンプリングレート（Hz）:", self.sb_sr)
         vright.addLayout(form)
 
         vright.addSpacing(20)
 
         vprog = QtWidgets.QVBoxLayout()
-        vprog.addWidget(QtWidgets.QLabel("当前文件处理进度"))
+        vprog.addWidget(QtWidgets.QLabel("現在のファイル処理状況"))
         vprog.addWidget(self.pb_file)
-        vprog.addWidget(QtWidgets.QLabel("全部文件处理进度"))
+        vprog.addWidget(QtWidgets.QLabel("トータル進捗状況"))
         vprog.addWidget(self.pb_all)
         vprog.addStretch(1)
         vright.addLayout(vprog)
         grid.addLayout(vright, 0, 2, 7, 1)
 
         # === 底部日志 ===
-        grid.addWidget(QtWidgets.QLabel("日志"), 7, 0)
+        grid.addWidget(QtWidgets.QLabel("出力ログ"), 7, 0)
         grid.addWidget(self.te_log, 8, 0, 1, 3)
 
         self.setLayout(grid)
@@ -390,9 +390,9 @@ class MainWindow(QtWidgets.QWidget):
         self.worker: Optional[DSREWorker] = None
 
         # 初始化完成后写入欢迎信息
-        self.append_log("软件制作：屈乐凡")
-        self.append_log("问题反馈：Le_Fan_Qv@outlook.com")
-        self.append_log("交流群组：323861356（QQ）")
+        self.append_log("ソフトウェア開発者： 屈乐凡")
+        self.append_log("フィードバック：Le_Fan_Qv@outlook.com")
+        self.append_log("ディスカッショングループ：323861356（QQ）")
 
     def on_add_files(self):
         filters = (
@@ -435,8 +435,8 @@ class MainWindow(QtWidgets.QWidget):
         # 置零进度
         self.pb_all.setValue(0)
         self.pb_file.setValue(0)
-        self.lbl_now.setText("正在初始化…")
-        self.append_log(f"开始处理 {len(files)} 个文件…")
+        self.lbl_now.setText("初期化中…")
+        self.append_log(f"処理開始するファイル: {len(files)}…")
 
         # 锁定按钮
         self.btn_start.setEnabled(False)
@@ -455,7 +455,7 @@ class MainWindow(QtWidgets.QWidget):
 
     @QtCore.Slot(int, int, str)
     def on_file_progress(self, cur, total, fname):
-        self.lbl_now.setText(f"正在处理… [{cur}/{total}]: {fname}")
+        self.lbl_now.setText(f"処理中… [{cur}/{total}]: {fname}")
         self.pb_file.setValue(0)
 
     @QtCore.Slot(int, str)
@@ -469,20 +469,20 @@ class MainWindow(QtWidgets.QWidget):
 
     @QtCore.Slot(str, str)
     def on_file_done(self, in_path, out_path):
-        self.append_log(f"处理完成: {os.path.basename(in_path)} -> {out_path}")
+        self.append_log(f"完成: {os.path.basename(in_path)} -> {out_path}")
 
     @QtCore.Slot(str, str)
     def on_error(self, fname, err):
-        self.append_log(f"[错误] {fname}: {err}")
+        self.append_log(f"[Error] {fname}: {err}")
 
     def on_cancel(self):
         if self.worker and self.worker.isRunning():
-            self.append_log("正在取消…")
+            self.append_log("取り消し…")
             self.worker.abort()
 
     def on_finished(self):
-        self.append_log("所有文件均已完成处理")
-        self.lbl_now.setText("控制")
+        self.append_log("すべてのファイルの処理が完了しました。")
+        self.lbl_now.setText("コントロール")
         self.btn_start.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.worker = None

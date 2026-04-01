@@ -1,38 +1,49 @@
 # DSRE / Deep Sound Resolution Enhancer
 
-## 简介 / Description
+## 説明 / Description
 
-DSRE 是一款 **高性能音频增强工具**，可以将任何音频文件批量处理为 **高解析度（Hi-Res）音频**，无需大量计算资源即可快速处理大批量音频文件。
+DSREは、あらゆるオーディオファイルをバッチ処理で高解像度（ハイレゾ）オーディオに変換できる高性能オーディオエンハンスメントツールです。大量のオーディオファイルを、大きな計算リソースを必要とせずに高速に処理できます。
 
-DSRE is a **high-performance audio enhancement tool** that can batch-convert any audio files into **high-resolution (Hi-Res) audio**.
-Inspired by Sony DSEE HX, it uses a **non-deep-learning frequency enhancement algorithm**, allowing fast processing of large batches without heavy computation.
+DSREは、あらゆるオーディオファイルをバッチ処理で高解像度（ハイレゾ）オーディオに変換できる高性能オーディオエンハンスメントツールです。Sony DSEE HXに着想を得て開発されたDSREは、ディープラーニングを使用しない周波数強調アルゴリズムを採用することで、計算負荷を抑えながら大量のファイルを高速に処理できます。
 
-**主要特点 / Key Features:**
+**主な特長:**
 
-* **批量处理 / Batch Processing**：一次性转换多个音频文件 / Convert multiple audio files at once.
-* **多格式支持 / Multiple Formats**：WAV、MP3、FLAC、M4A 等 / Supports WAV, MP3, FLAC, M4A, etc.
-* **保持封面和元数据 / Preserves Cover & Metadata**：无需手动修改 / No manual editing required.
-* **灵活参数控制 / Flexible Parameters**：调制次数、衰减幅度、高通滤波器等 / Modulation count, decay, high-pass filter, etc.
-* **快速稳定 / Fast & Stable**：不依赖深度学习模型 / Does not rely on deep learning, fast processing.
+* **バッチ処理:** 複数のオーディオファイルを一度に変換できます。
+
+* **複数のフォーマットに対応:** WAV、MP3、FLAC、M4Aなどに対応しています。
+
+* **カバー画像とメタデータを保持:** 手動編集は不要です。
+
+* **柔軟なパラメータ設定:** モジュレーションカウント、ディケイ、ハイパスフィルターなどを調整できます。
+
+* **高速かつ安定:** ディープラーニングモデルに依存しない処理です。
 
 ---
 
-## 安装与使用 / Installation & Usage
+## インストールと使用 / Installation & Usage
 
 [下载 / Download](https://github.com/x1aoqv/DSRE---Digital-Sound-Resolution-Enhancer/releases/tag/v1.0.250908_beta)
 
 ---
 
-## 参数说明 / Parameters
+## パラメータの説明 / Parameters
 
-| 参数 / Parameter                               | 默认值 / Default | 说明 / Description                                                   |
+| パラメータ | デフォルト | 説明 |
+
 | -------------------------------------------- | ------------- | ------------------------------------------------------------------ |
-| 调制次数 (m) / Modulation count                  | 8             | 音频增强重复次数 / Number of enhancement repetitions, higher = more detail |
-| 衰减幅度 (decay)                                 | 1.25          | 高频衰减控制 / High-frequency decay control                              |
-| 预处理高通截止频率 / Pre-processing high-pass cutoff  | 3000 Hz       | 处理前高通滤波器 / Pre-enhancement high-pass filter                        |
-| 后处理高通截止频率 / Post-processing high-pass cutoff | 16000 Hz      | 处理后高通滤波器 / Post-enhancement high-pass filter                       |
-| 滤波器阶数 / Filter order                         | 11            | 高通滤波器阶数 / High-pass filter order                                   |
-| 目标采样率 / Target sampling rate                 | 96000 Hz      | 输出音频采样率 / Output audio sample rate                                 |
-| 输出格式 / Output format                         | ALAC / FLAC   | 选择 Hi-Res 输出格式 / Choose Hi-Res output format                       |
 
----
+| 変調回数 (m) | 8 | 強調処理の繰り返し回数。数値が大きいほど詳細度が高くなります。 |
+
+| ディケイ | 1.25 | 高周波減衰制御 |
+
+| 前処理ハイパスカットオフ | 3000 Hz | 強調処理前のハイパスフィルター |
+
+| 後処理ハイパスカットオフ | 16000 Hz | 強調処理後のハイパスフィルター |
+
+| フィルター次数 | 11 | ハイパスフィルター次数 |
+
+| 目標サンプリングレート | 96000 Hz | 出力オーディオのサンプリングレート |
+
+| 出力フォーマット | ALAC / FLAC | ハイレゾ出力フォーマットを選択                     |
+
+| --------------------------------------------------------------------------------------------------------------------------------------
