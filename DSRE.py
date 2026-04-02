@@ -135,6 +135,15 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 "-c:v", "copy",
                 out_path
             ]
+            try:
+                cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                cover_tmp.close()
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", in_path, "-an", "-c:v", "copy", cover_tmp.name],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True
+                )
+            except Exception:
+                cover_tmp = None
         elif fmt == "MP3":
             # MP3 encoding with high quality settings
             cmd = [
@@ -150,6 +159,15 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 "-c:v", "copy",
                 out_path
             ]
+            try:
+                cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                cover_tmp.close()
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", in_path, "-an", "-c:v", "copy", cover_tmp.name],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True
+                )
+            except Exception:
+                cover_tmp = None
         elif fmt == "FLAC":
             # Extract cover image
             try:
@@ -162,8 +180,7 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
             except Exception:
                 cover_tmp = None
 
-        if cover_tmp and os.path.exists(cover_tmp.name):
-            cmd = [
+        cmd = [
                 "ffmpeg", "-y",
                 "-i", tmp_wav.name,  # WAV audio
                 "-i", in_path,       # Metadata source
@@ -175,17 +192,6 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 "-c:a", codec_map[fmt],
                 "-sample_fmt", sample_fmt_map[fmt],
                 "-c:v", "copy",
-                out_path
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", tmp_wav.name,
-                "-i", in_path,
-                "-map", "0:a",
-                "-map_metadata", "1",
-                "-c:a", codec_map[fmt],
-                "-sample_fmt", sample_fmt_map[fmt],
                 out_path
             ]
 
@@ -221,11 +227,10 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 os.remove(tmp_wav.name)
             except OSError:
                 pass
-        if cover_tmp and os.path.exists(cover_tmp.name):
-            try:
-                os.remove(cover_tmp.name)
-            except OSError:
-                pass
+        try:
+            os.remove(cover_tmp.name)
+        except OSError:
+            pass
 
 # ======== ENHANCED AUDIO PROCESSING ALGORITHMS ========
 
