@@ -122,29 +122,7 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
         codec_map = {"ALAC": "alac", "FLAC": "flac", "MP3": "libmp3lame"}
         sample_fmt_map = {"ALAC": "s32p", "FLAC": "s32", "MP3": "s16p"}  # MP3 uses 16bit planar
 
-        if fmt == "ALAC":
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", tmp_wav.name,
-                "-i", in_path,
-                "-map", "0:a",       # Temporary WAV audio
-                "-map", "1:v?",      # Cover
-                "-map_metadata", "1",# Metadata
-                "-c:a", codec_map[fmt],
-                "-sample_fmt", sample_fmt_map[fmt],
-                "-c:v", "copy",
-                out_path
-            ]
-            try:
-                cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                cover_tmp.close()
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", in_path, "-an", "-c:v", "copy", cover_tmp.name],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True
-                )
-            except Exception:
-                cover_tmp = None
-        elif fmt == "MP3":
+        if fmt == "MP3":
             # MP3 encoding with high quality settings
             cmd = [
                 "ffmpeg", "-y",
@@ -159,16 +137,7 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 "-c:v", "copy",
                 out_path
             ]
-            try:
-                cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                cover_tmp.close()
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", in_path, "-an", "-c:v", "copy", cover_tmp.name],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True
-                )
-            except Exception:
-                cover_tmp = None
-        elif fmt == "FLAC":
+        else:
             # Extract cover image
             try:
                 cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
@@ -179,21 +148,20 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 )
             except Exception:
                 cover_tmp = None
-
-        cmd = [
-                "ffmpeg", "-y",
-                "-i", tmp_wav.name,  # WAV audio
-                "-i", in_path,       # Metadata source
-                "-i", cover_tmp.name, # Cover
-                "-map", "0:a",       # Audio
-                "-map", "2:v",       # Cover
-                "-disposition:v", "attached_pic",
-                "-map_metadata", "1",# Metadata
-                "-c:a", codec_map[fmt],
-                "-sample_fmt", sample_fmt_map[fmt],
-                "-c:v", "copy",
-                out_path
-            ]
+            cmd = [
+                    "ffmpeg", "-y",
+                    "-i", tmp_wav.name,  # WAV audio
+                    "-i", in_path,       # Metadata source
+                    "-i", cover_tmp.name, # Cover
+                    "-map", "0:a",       # Audio
+                    "-map", "2:v",       # Cover
+                    "-disposition:v", "attached_pic",
+                    "-map_metadata", "1",# Metadata
+                    "-c:a", codec_map[fmt],
+                    "-sample_fmt", sample_fmt_map[fmt],
+                    "-c:v", "copy",
+                    out_path
+                ]
 
         try:
             print(f"DEBUG: Running FFmpeg command: {' '.join(cmd)}")
