@@ -1,4 +1,4 @@
-# DSRE / Deep Sound Resolution Enhancer
+# [DSRE / Deep Sound Resolution Enhancer](https://github.com/Urabewe/DSRE---Digital-Sound-Resolution-Enhancer-English)の日本語化版
 
 ## 説明 / Description
 
