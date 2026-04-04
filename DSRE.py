@@ -95,7 +95,7 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
     try:
         tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_wav.close()
-        
+
         # Write temporary WAV file
         sf.write(tmp_wav.name, data, sr, subtype="FLOAT")
         
@@ -148,20 +148,35 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 )
             except Exception:
                 cover_tmp = None
-            cmd = [
-                    "ffmpeg", "-y",
-                    "-i", tmp_wav.name,  # WAV audio
-                    "-i", in_path,       # Metadata source
-                    "-i", cover_tmp.name, # Cover
-                    "-map", "0:a",       # Audio
-                    "-map", "2:v",       # Cover
-                    "-disposition:v", "attached_pic",
-                    "-map_metadata", "1",# Metadata
-                    "-c:a", codec_map[fmt],
-                    "-sample_fmt", sample_fmt_map[fmt],
-                    "-c:v", "copy",
-                    out_path
-                ]
+            if cover_tmp is not None:
+                cmd = [
+                        "ffmpeg", "-y",
+                        "-i", tmp_wav.name,  # WAV audio
+                        "-i", in_path,       # Metadata source
+                        "-i", cover_tmp.name, # Cover
+                        "-map", "0:a",       # Audio
+                        "-map", "2:v",       # Cover
+                        "-disposition:v", "attached_pic",
+                        "-map_metadata", "1",# Metadata
+                        "-c:a", codec_map[fmt],
+                        "-sample_fmt", sample_fmt_map[fmt],
+                        "-c:v", "copy",
+                        out_path
+                    ]
+            else:
+                cmd = [
+                        "ffmpeg", "-y",
+                        "-i", tmp_wav.name,  # WAV audio
+                        "-i", in_path,       # Metadata source
+                        "-map", "0:a",       # Audio
+                        "-disposition:v", "attached_pic",
+                        "-map_metadata", "1",# Metadata
+                        "-c:a", codec_map[fmt],
+                        "-sample_fmt", sample_fmt_map[fmt],
+                        "-c:v", "copy",
+                        out_path
+                    ]
+
 
         try:
             print(f"DEBUG: Running FFmpeg command: {' '.join(cmd)}")
