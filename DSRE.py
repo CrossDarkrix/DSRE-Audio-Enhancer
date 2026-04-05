@@ -148,14 +148,41 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 )
             except Exception:
                 cover_tmp = None
-            if cover_tmp is not None:
+            try:
+                if cover_tmp is not None:
+                    cmd = [
+                            "ffmpeg", "-y",
+                            "-i", tmp_wav.name,  # WAV audio
+                            "-i", in_path,       # Metadata source
+                            "-i", cover_tmp.name, # Cover
+                            "-map", "0:a",       # Audio
+                            "-map", "2:v",       # Cover
+                            "-disposition:v", "attached_pic",
+                            "-map_metadata", "1",# Metadata
+                            "-c:a", codec_map[fmt],
+                            "-sample_fmt", sample_fmt_map[fmt],
+                            "-c:v", "copy",
+                            out_path
+                        ]
+                else:
+                    cmd = [
+                            "ffmpeg", "-y",
+                            "-i", tmp_wav.name,  # WAV audio
+                            "-i", in_path,       # Metadata source
+                            "-map", "0:a",       # Audio
+                            "-disposition:v", "attached_pic",
+                            "-map_metadata", "1",# Metadata
+                            "-c:a", codec_map[fmt],
+                            "-sample_fmt", sample_fmt_map[fmt],
+                            "-c:v", "copy",
+                            out_path
+                        ]
+            except:
                 cmd = [
                         "ffmpeg", "-y",
                         "-i", tmp_wav.name,  # WAV audio
                         "-i", in_path,       # Metadata source
-                        "-i", cover_tmp.name, # Cover
                         "-map", "0:a",       # Audio
-                        "-map", "2:v",       # Cover
                         "-disposition:v", "attached_pic",
                         "-map_metadata", "1",# Metadata
                         "-c:a", codec_map[fmt],
@@ -163,20 +190,6 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                         "-c:v", "copy",
                         out_path
                     ]
-            else:
-                cmd = [
-                        "ffmpeg", "-y",
-                        "-i", tmp_wav.name,  # WAV audio
-                        "-i", in_path,       # Metadata source
-                        "-map", "0:a",       # Audio
-                        "-disposition:v", "attached_pic",
-                        "-map_metadata", "1",# Metadata
-                        "-c:a", codec_map[fmt],
-                        "-sample_fmt", sample_fmt_map[fmt],
-                        "-c:v", "copy",
-                        out_path
-                    ]
-
 
         try:
             print(f"DEBUG: Running FFmpeg command: {' '.join(cmd)}")
@@ -208,11 +221,11 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
         if tmp_wav and os.path.exists(tmp_wav.name):
             try:
                 os.remove(tmp_wav.name)
-            except OSError:
+            except:
                 pass
         try:
             os.remove(cover_tmp.name)
-        except OSError:
+        except:
             pass
 
 # ======== ENHANCED AUDIO PROCESSING ALGORITHMS ========
