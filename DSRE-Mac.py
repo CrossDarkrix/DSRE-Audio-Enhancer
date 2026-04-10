@@ -31,10 +31,6 @@ def add_ffmpeg_to_path():
         ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg")
         if not os.path.exists(ffmpeg_exe):
             print(f"Warning: ffmpeg not found in: {ffmpeg_dir}")
-            try:
-                subprocess.run("brew install ffmpeg", shell=True)
-            except:
-                pass
         else:
             print(f"FFmpeg found: {ffmpeg_exe}")
     
@@ -134,20 +130,16 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
             try:
                 cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
                 cover_tmp.close()
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", in_path, "-an", "-c:v", "copy", cover_tmp.name],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True
-                )
+                subprocess.run("ffmpeg -y -i {} -an -c:v copy {}".format(in_path, cover_tmp.name), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
             except Exception:
                 cover_tmp = None
             try:
                 if cover_tmp is not None:
-                    cmd = 'ffmpeg -i "{}" -i "{}" -i "{}" -map 0:a -map 2:v -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, cover_tmp.name, codec_map[fmt], sample_fmt_map[fmt], out_path)
+                    cmd = 'ffmpeg -i "{}" -i "{}" -i "{}" -map 0:a -map 2:v -disposition:v attached_pic -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, cover_tmp.name, codec_map[fmt], sample_fmt_map[fmt], out_path)
                 else:
-                    cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], ample_fmt_map[fmt], out_path)
+                    cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -disposition:v attached_pic -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], ample_fmt_map[fmt], out_path)
             except:
-                cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], sample_fmt_map[fmt], out_path)
-
+                cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -disposition:v attached_pic -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], sample_fmt_map[fmt], out_path)
         try:
             print(f"DEBUG: Running FFmpeg command: {' '.join(cmd)}")
             result = subprocess.run(cmd, check=True, capture_output=True, text=True, shell=True)
