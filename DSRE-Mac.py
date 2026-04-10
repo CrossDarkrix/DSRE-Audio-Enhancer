@@ -137,9 +137,9 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
                 if cover_tmp is not None:
                     cmd = 'ffmpeg -i "{}" -i "{}" -i "{}" -map 0:a -map 2:v -disposition:v attached_pic -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, cover_tmp.name, codec_map[fmt], sample_fmt_map[fmt], out_path)
                 else:
-                    cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -disposition:v attached_pic -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], ample_fmt_map[fmt], out_path)
+                    cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], ample_fmt_map[fmt], out_path)
             except:
-                cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -disposition:v attached_pic -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], sample_fmt_map[fmt], out_path)
+                cmd = 'ffmpeg -i "{}" -i "{}" -map 0:a -map_metadata 1 -c:a {} -y -sample_fmt {} -c:v copy "{}"'.format(tmp_wav.name, in_path, codec_map[fmt], sample_fmt_map[fmt], out_path)
         try:
             print(f"DEBUG: Running FFmpeg command: {' '.join(cmd)}")
             result = subprocess.run(cmd, check=True, capture_output=True, text=True, shell=True)
