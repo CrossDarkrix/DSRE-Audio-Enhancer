@@ -130,7 +130,7 @@ def save_wav24_out(in_path, y_out, sr, out_path, fmt="ALAC", normalize=True):
             try:
                 cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
                 cover_tmp.close()
-                subprocess.run("ffmpeg -y -i {} -an -c:v copy {}".format(in_path, cover_tmp.name), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
+                subprocess.run("ffmpeg -i {} -an -y -c:v copy {}".format(in_path, cover_tmp.name), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
             except Exception:
                 cover_tmp = None
             try:
