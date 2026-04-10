@@ -31,6 +31,10 @@ def add_ffmpeg_to_path():
         ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg")
         if not os.path.exists(ffmpeg_exe):
             print(f"Warning: ffmpeg not found in: {ffmpeg_dir}")
+            try:
+                subprocess.run("brew install ffmpeg", shell=True)
+            except:
+                pass
         else:
             print(f"FFmpeg found: {ffmpeg_exe}")
     
