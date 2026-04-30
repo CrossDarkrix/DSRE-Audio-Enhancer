@@ -14,10 +14,6 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtGui import QIcon, QTextCursor, QDragEnterEvent, QDropEvent, QKeySequence, QAction
 
 
-# =========================================================
-# FFmpeg helpers
-# =========================================================
-
 def _decode_subprocess_output(data: bytes) -> str:
     if data is None:
         return ""
@@ -79,11 +75,6 @@ def get_ffprobe_executable() -> str:
         return local
     raise FileNotFoundError("FFprobe not found. Place ffprobe.exe in the 'ffmpeg' folder next to this script.")
 
-
-# =========================================================
-# Basic audio helpers
-# =========================================================
-
 def ensure_ch_first(y: np.ndarray) -> np.ndarray:
     y = np.asarray(y)
     if y.ndim == 1:
@@ -137,11 +128,6 @@ def audio_rms(x: np.ndarray) -> float:
     if x is None or x.size == 0:
         return 0.0
     return float(np.sqrt(np.mean(np.square(np.asarray(x, dtype=np.float64)))))
-
-
-# =========================================================
-# FFprobe / decode / save helpers
-# =========================================================
 
 def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
     ffprobe = get_ffprobe_executable()
@@ -346,11 +332,6 @@ def save_with_metadata(in_path: str, y_out: np.ndarray, sr: int, out_path: str, 
             except Exception:
                 pass
 
-
-# =========================================================
-# NumPy-only DSP helpers
-# =========================================================
-
 def apply_iir_filter(b, a, x):
     x = np.asarray(x, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
@@ -441,11 +422,6 @@ def bandpass_fft(x, sr, low_hz, high_hz, transition_ratio=0.15):
 
     y = np.fft.irfft(X * mask, n=n)
     return y.astype(np.float32)
-
-
-# =========================================================
-# Enhancement algorithm
-# =========================================================
 
 def generate_harmonics(signal_band, fundamental_freq, sr, num_harmonics=5, harmonic_strength=0.3):
     signal_band = sanitize_audio(signal_band)
