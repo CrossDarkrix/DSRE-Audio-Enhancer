@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
@@ -11,8 +12,18 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import soundfile as sf
 from PySide6 import QtCore, QtWidgets
-from PySide6.QtGui import QIcon, QTextCursor, QDragEnterEvent, QDropEvent, QKeySequence, QAction
+from PySide6.QtGui import (
+    QAction,
+    QDragEnterEvent,
+    QDropEvent,
+    QIcon,
+    QKeySequence,
+    QTextCursor,
+)
 
+MEMMAP_BLOCK_FRAMES = 262144   # ブロック単位の読み書きサイズ（frames）
+MEMMAP_TEMP_DIR = None         # 例: r"D:\\dsre_tmp" / None なら OS 既定 temp
+ENABLE_DIFF_LOG = False        # メモリ節約のため既定OFF
 
 def _decode_subprocess_output(data: bytes) -> str:
     if data is None:
@@ -27,10 +38,12 @@ def _decode_subprocess_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _run_subprocess(cmd, check=False, capture_stdout=False, capture_stderr=False):
+def _run_subprocess(cmd, check=False, capture_stdout=False, capture_stderr=False, input_bytes=None):
     result = subprocess.run(
         cmd,
+        shell=True,
         check=False,
+        input=input_bytes,
         stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
         stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
     )
@@ -47,8 +60,12 @@ def _run_subprocess(cmd, check=False, capture_stdout=False, capture_stderr=False
 
     return result
 
+
 def add_ffmpeg_to_path():
-    ffmpeg_dir = os.path.join(os.path.dirname(__file__), "ffmpeg")
+    if hasattr(sys, "_MEIPASS"):
+        ffmpeg_dir = os.path.join(sys._MEIPASS, "ffmpeg")
+    else:
+        ffmpeg_dir = os.path.join(os.path.dirname(__file__), "ffmpeg")
     if os.path.isdir(ffmpeg_dir):
         os.environ["PATH"] += os.pathsep + ffmpeg_dir
 
@@ -75,59 +92,6 @@ def get_ffprobe_executable() -> str:
         return local
     raise FileNotFoundError("FFprobe not found. Place ffprobe.exe in the 'ffmpeg' folder next to this script.")
 
-def ensure_ch_first(y: np.ndarray) -> np.ndarray:
-    y = np.asarray(y)
-    if y.ndim == 1:
-        return y[np.newaxis, :]
-    if y.ndim == 2:
-        # If likely (samples, channels), transpose to (channels, samples)
-        if y.shape[0] > y.shape[1]:
-            return y.T
-        return y
-    raise ValueError(f"Unsupported audio shape: {y.shape}")
-
-
-def ensure_sf_shape(y: np.ndarray) -> np.ndarray:
-    y = np.asarray(y)
-    if y.ndim == 1:
-        return y[:, None]
-    if y.ndim == 2:
-        # If likely (channels, samples), transpose to (samples, channels)
-        if y.shape[0] <= y.shape[1]:
-            return y.T
-        return y
-    raise ValueError(f"Unsupported audio shape: {y.shape}")
-
-
-def sanitize_audio(x: np.ndarray, fallback: Optional[np.ndarray] = None) -> np.ndarray:
-    if x is None:
-        if fallback is not None:
-            return fallback.copy().astype(np.float32)
-        raise ValueError("Audio data is None")
-
-    x = np.asarray(x)
-    if x.size == 0:
-        if fallback is not None:
-            return fallback.copy().astype(np.float32)
-        raise ValueError("Audio data is empty")
-
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
-    peak = float(np.max(np.abs(x))) if x.size else 0.0
-    if peak > 1000.0:
-        x = x / peak
-    return x
-
-
-def audio_peak(x: np.ndarray) -> float:
-    if x is None or x.size == 0:
-        return 0.0
-    return float(np.max(np.abs(x)))
-
-
-def audio_rms(x: np.ndarray) -> float:
-    if x is None or x.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(np.square(np.asarray(x, dtype=np.float64)))))
 
 def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
     ffprobe = get_ffprobe_executable()
@@ -139,8 +103,8 @@ def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
         "-show_format",
         file_path,
     ]
-    result = _run_subprocess(cmd, capture_stdout=True)
-    data = json.loads(result.stdout)
+    result = _run_subprocess(cmd, check=True, capture_stdout=True, capture_stderr=True)
+    data = json.loads(result.stdout_text)
 
     audio_stream = None
     for s in data.get("streams", []):
@@ -159,14 +123,112 @@ def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
         "bit_rate": int(audio_stream.get("bit_rate", data.get("format", {}).get("bit_rate", 0)) or 0),
     }
 
+def ensure_ch_first(y: np.ndarray) -> np.ndarray:
+    y = np.asarray(y)
+    if y.ndim == 1:
+        return y[np.newaxis, :]
+    if y.ndim == 2:
+        # (samples, channels) っぽければ転置して (channels, samples)
+        if y.shape[0] > y.shape[1]:
+            return y.T
+        return y
+    raise ValueError(f"Unsupported audio shape: {y.shape}")
 
-def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
+
+def ensure_sf_shape(y: np.ndarray) -> np.ndarray:
+    y = np.asarray(y)
+    if y.ndim == 1:
+        return y[:, None]
+    if y.ndim == 2:
+        # (channels, samples) -> (samples, channels)
+        if y.shape[0] <= y.shape[1]:
+            return y.T
+        return y
+    raise ValueError(f"Unsupported audio shape: {y.shape}")
+
+
+def sanitize_audio(x: np.ndarray, fallback: Optional[np.ndarray] = None) -> np.ndarray:
+    if x is None:
+        if fallback is not None:
+            return np.asarray(fallback, dtype=np.float32).copy()
+        raise ValueError("Audio data is None")
+
+    x = np.asarray(x)
+    if x.size == 0:
+        if fallback is not None:
+            return np.asarray(fallback, dtype=np.float32).copy()
+        raise ValueError("Audio data is empty")
+
+    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    if peak > 1000.0:
+        x = x / peak
+    return x
+
+
+def audio_peak(x: np.ndarray) -> float:
+    if x is None:
+        return 0.0
+    a = np.asarray(x)
+    if a.size == 0:
+        return 0.0
+    return float(np.max(np.abs(a)))
+
+
+def audio_rms(x: np.ndarray) -> float:
+    if x is None:
+        return 0.0
+    a = np.asarray(x)
+    if a.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(a.astype(np.float64)))))
+
+def get_work_dir() -> str:
     """
-    Decode audio via FFmpeg to float32 WAV at target_sr.
-    Returns audio as (channels, samples), sr.
+    memmap / temp wav の作業フォルダを決める。
+    優先順:
+      1) MEMMAP_TEMP_DIR
+      2) base_output_dir
+      3) OS の temp dir
     """
+    candidates = []
+    if MEMMAP_TEMP_DIR:
+        candidates.append(MEMMAP_TEMP_DIR)
+    candidates.append(tempfile.gettempdir())
+
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            testfile = os.path.join(d, ".__dsre_write_test__")
+            with open(testfile, "wb") as f:
+                f.write(b"ok")
+            os.remove(testfile)
+            return d
+        except Exception:
+            continue
+
+    raise RuntimeError("No writable temp directory available")
+
+def create_audio_memmap(shape, dtype=np.float32, dir=None):
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".dat", dir=dir)
+    tmp.close()
+    mm = np.memmap(tmp.name, dtype=dtype, mode="w+", shape=shape)
+    return mm, tmp.name
+
+
+def cleanup_files(*paths):
+    for p in paths:
+        if not p:
+            continue
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+
+def decode_audio_to_temp_wav(file_path: str, target_sr: int, temp_dir=None) -> str:
     ffmpeg = get_ffmpeg_executable()
-    tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=temp_dir)
     tmp_wav.close()
 
     cmd = [
@@ -179,21 +241,42 @@ def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
         tmp_wav.name,
     ]
 
-    try:
-        _run_subprocess(cmd, check=True, capture_stderr=True)
-        y, sr = sf.read(tmp_wav.name, always_2d=True)
-        y = y.T.astype(np.float32, copy=False)
-        return sanitize_audio(y), sr
-    finally:
-        try:
-            os.remove(tmp_wav.name)
-        except Exception:
-            pass
+    _run_subprocess(cmd, check=True, capture_stderr=True)
+    return tmp_wav.name
 
 
-def extract_cover_image(in_path: str) -> Optional[str]:
+def load_audio_to_memmap(file_path: str, target_sr: int, temp_dir=None, blocksize=MEMMAP_BLOCK_FRAMES):
+    """
+    入力ファイル -> ffmpeg で temp wav -> soundfile でブロック読み -> memmap
+    戻り値:
+        mm_y, sr, mm_path, wav_path
+    mm_y shape = (channels, samples)
+    """
+    wav_path = decode_audio_to_temp_wav(file_path, target_sr=target_sr, temp_dir=temp_dir)
+
+    with sf.SoundFile(wav_path, "r") as f:
+        sr = f.samplerate
+        channels = f.channels
+        frames = len(f)
+
+        mm_y, mm_path = create_audio_memmap((channels, frames), dtype=np.float32, dir=temp_dir)
+
+        pos = 0
+        while pos < frames:
+            to_read = min(blocksize, frames - pos)
+            block = f.read(to_read, dtype="float32", always_2d=True)  # (frames, ch)
+            if block.size == 0:
+                break
+            mm_y[:, pos:pos + len(block)] = block.T
+            pos += len(block)
+
+        mm_y.flush()
+
+    return mm_y, sr, mm_path, wav_path
+
+def extract_cover_image(in_path: str, temp_dir=None) -> Optional[str]:
     ffmpeg = get_ffmpeg_executable()
-    cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir)
     cover_tmp.close()
 
     cmd = [
@@ -206,24 +289,31 @@ def extract_cover_image(in_path: str) -> Optional[str]:
     ]
 
     try:
-        result = _run_subprocess(cmd)
+        result = _run_subprocess(cmd, check=False, capture_stderr=True)
         if result.returncode == 0 and os.path.exists(cover_tmp.name) and os.path.getsize(cover_tmp.name) > 0:
             return cover_tmp.name
     except Exception:
         pass
 
-    try:
-        os.remove(cover_tmp.name)
-    except Exception:
-        pass
+    cleanup_files(cover_tmp.name)
     return None
 
 
-def save_with_metadata(in_path: str, y_out: np.ndarray, sr: int, out_path: str, fmt: str = "ALAC", normalize: bool = True) -> str:
+def save_with_metadata_from_memmap(
+    in_path: str,
+    mm_out,
+    sr: int,
+    out_path: str,
+    fmt: str = "ALAC",
+    normalize: bool = True,
+    temp_dir=None,
+    blocksize=MEMMAP_BLOCK_FRAMES,
+) -> str:
+    """
+    memmap 出力をブロック単位で temp wav に書いてから ffmpeg へ渡す。
+    """
     if not os.path.exists(in_path):
         raise FileNotFoundError(f"Input file not found: {in_path}")
-    if y_out is None or y_out.size == 0:
-        raise ValueError("Empty audio data provided")
     if sr <= 0:
         raise ValueError(f"Invalid sample rate: {sr}")
 
@@ -232,30 +322,44 @@ def save_with_metadata(in_path: str, y_out: np.ndarray, sr: int, out_path: str, 
     if fmt not in ("ALAC", "FLAC", "MP3"):
         raise ValueError(f"Unsupported format: {fmt}")
 
-    data = ensure_sf_shape(sanitize_audio(y_out)).astype(np.float32, copy=False)
+    channels, frames = mm_out.shape
+
+    scale = 1.0
     if normalize:
-        peak = float(np.max(np.abs(data))) if data.size else 0.0
+        peak = 0.0
+        for ch in range(channels):
+            peak = max(peak, float(np.max(np.abs(mm_out[ch]))))
         if peak > 1.0:
-            data /= peak
-    else:
-        data = np.clip(data, -1.0, 1.0)
+            scale = 1.0 / peak
 
-    if np.max(np.abs(data)) < 1e-10:
-        raise ValueError("Audio data is essentially silent - cannot save")
-
-    tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=temp_dir)
     tmp_wav.close()
     cover_tmp = None
 
     try:
-        sf.write(tmp_wav.name, data, sr, subtype="FLOAT")
+        with sf.SoundFile(
+            tmp_wav.name,
+            mode="w",
+            samplerate=sr,
+            channels=channels,
+            format="WAV",
+            subtype="FLOAT",
+        ) as f:
+            pos = 0
+            while pos < frames:
+                n = min(blocksize, frames - pos)
+                block = np.array(mm_out[:, pos:pos + n], dtype=np.float32, copy=False).T  # (frames, ch)
+                if scale != 1.0:
+                    block = block * scale
+                f.write(block)
+                pos += n
 
         codec_map = {"ALAC": "alac", "FLAC": "flac", "MP3": "libmp3lame"}
         ext_map = {"ALAC": "m4a", "FLAC": "flac", "MP3": "mp3"}
         sample_fmt_map = {"ALAC": "s32p", "FLAC": "s32", "MP3": "s16p"}
-        out_path = os.path.splitext(out_path)[0] + "." + ext_map[fmt]
 
-        cover_tmp = extract_cover_image(in_path)
+        out_path = os.path.splitext(out_path)[0] + "." + ext_map[fmt]
+        cover_tmp = extract_cover_image(in_path, temp_dir=temp_dir)
 
         if fmt == "MP3":
             if cover_tmp:
@@ -319,18 +423,17 @@ def save_with_metadata(in_path: str, y_out: np.ndarray, sr: int, out_path: str, 
         if not os.path.exists(out_path) or os.path.getsize(out_path) < 1000:
             raise RuntimeError(f"Output file was not created correctly: {out_path}")
         return out_path
+
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"FFmpeg command failed: {' '.join(cmd)}\nSTDERR:\n{e.stderr}\nSTDOUT:\n{e.stdout}")
+        stderr_text = getattr(e, "stderr_text", _decode_subprocess_output(getattr(e, "stderr", b"")))
+        stdout_text = getattr(e, "stdout_text", _decode_subprocess_output(getattr(e, "stdout", b"")))
+        raise RuntimeError(
+            f"FFmpeg command failed: {' '.join(cmd)}\n"
+            f"STDERR:\n{stderr_text}\n"
+            f"STDOUT:\n{stdout_text}"
+        )
     finally:
-        try:
-            os.remove(tmp_wav.name)
-        except Exception:
-            pass
-        if cover_tmp and os.path.exists(cover_tmp):
-            try:
-                os.remove(cover_tmp)
-            except Exception:
-                pass
+        cleanup_files(tmp_wav.name, cover_tmp)
 
 def apply_iir_filter(b, a, x):
     x = np.asarray(x, dtype=np.float64)
@@ -423,6 +526,7 @@ def bandpass_fft(x, sr, low_hz, high_hz, transition_ratio=0.15):
     y = np.fft.irfft(X * mask, n=n)
     return y.astype(np.float32)
 
+
 def generate_harmonics(signal_band, fundamental_freq, sr, num_harmonics=5, harmonic_strength=0.3):
     signal_band = sanitize_audio(signal_band)
     if len(signal_band) == 0:
@@ -435,7 +539,9 @@ def generate_harmonics(signal_band, fundamental_freq, sr, num_harmonics=5, harmo
             phase_increment = 2 * np.pi * harmonic_freq / sr
             if not np.isfinite(phase_increment):
                 continue
-            harmonic_oscillator = np.sin(phase_increment * np.arange(len(signal_band), dtype=np.float64)).astype(np.float32)
+            harmonic_oscillator = np.sin(
+                phase_increment * np.arange(len(signal_band), dtype=np.float64)
+            ).astype(np.float32)
             if not np.all(np.isfinite(harmonic_oscillator)):
                 continue
             harmonic_content = signal_band * harmonic_oscillator * (harmonic_strength / h)
@@ -444,14 +550,11 @@ def generate_harmonics(signal_band, fundamental_freq, sr, num_harmonics=5, harmo
             enhanced += harmonic_content
     return sanitize_audio(enhanced, fallback=signal_band)
 
-
-def multiband_exciter(x, sr, harmonic_intensity=0.6, progress_cb=None, abort_cb=None):
-    x = ensure_ch_first(x).astype(np.float32, copy=False)
-    enhanced = np.zeros_like(x, dtype=np.float32)
+def multiband_exciter_lowmem(src, dst, sr, harmonic_intensity=0.6, progress_cb=None, abort_cb=None):
+    src = ensure_ch_first(src)
     nyquist = sr // 2
     base_strength_scale = float(np.clip(harmonic_intensity, 0.1, 1.5))
 
-    bands = []
     band_definitions = [
         {"name": "Sub Bass", "low": 20, "high": 80, "gain": 1.10, "harmonics": 3, "strength": 0.08},
         {"name": "Bass", "low": 80, "high": 250, "gain": 1.20, "harmonics": 4, "strength": 0.14},
@@ -461,45 +564,47 @@ def multiband_exciter(x, sr, harmonic_intensity=0.6, progress_cb=None, abort_cb=
         {"name": "Presence", "low": 8000, "high": 16000, "gain": 1.50, "harmonics": 3, "strength": 0.18},
         {"name": "Air", "low": 16000, "high": min(20000, nyquist - 1000), "gain": 1.35, "harmonics": 2, "strength": 0.12},
     ]
-    for band in band_definitions:
-        if band["low"] < nyquist and band["high"] < nyquist and band["high"] > band["low"]:
-            bands.append(band)
+    bands = [b for b in band_definitions if b["low"] < nyquist and b["high"] < nyquist and b["high"] > b["low"]]
 
-    if not bands:
-        return x.astype(np.float32)
-
-    for ch in range(x.shape[0]):
+    for ch in range(src.shape[0]):
         if abort_cb and abort_cb():
             break
-        channel_enhanced = x[ch].copy()
+
+        x_ch = np.asarray(src[ch], dtype=np.float32)
+        channel_enhanced = np.array(x_ch, dtype=np.float32, copy=True)
+
         for i, band in enumerate(bands):
             if abort_cb and abort_cb():
                 break
             if progress_cb:
-                progress = int((i + ch * len(bands)) * 100 / (len(bands) * x.shape[0]))
+                progress = int((i + ch * len(bands)) * 100 / (len(bands) * src.shape[0]))
                 progress_cb(progress, f"Processing band {band['name']}")
+
             try:
-                band_signal = bandpass_fft(x[ch], sr, band["low"], band["high"])
-                band_signal = sanitize_audio(band_signal, fallback=np.zeros_like(x[ch], dtype=np.float32))
+                band_signal = bandpass_fft(x_ch, sr, band["low"], band["high"])
+                band_signal = sanitize_audio(band_signal, fallback=np.zeros_like(x_ch, dtype=np.float32))
                 if audio_peak(band_signal) < 1e-8:
                     continue
+
                 center_freq = (band["low"] + band["high"]) / 2
                 strength = band["strength"] * base_strength_scale
                 harmonics_added = generate_harmonics(band_signal, center_freq, sr, band["harmonics"], strength)
                 saturated = np.tanh(harmonics_added * 1.35).astype(np.float32) * 0.82
                 band_enhanced = saturated * band["gain"]
+
                 if not np.all(np.isfinite(band_enhanced)):
                     continue
                 channel_enhanced = channel_enhanced + band_enhanced * 0.22
             except Exception:
                 continue
-        enhanced[ch] = sanitize_audio(channel_enhanced, fallback=x[ch])
-    return enhanced
+
+        dst[ch, :] = sanitize_audio(channel_enhanced, fallback=x_ch)
+
+    dst.flush()
 
 
-def psychoacoustic_enhancer(x, sr, strength=1.0, progress_cb=None, abort_cb=None):
-    x = ensure_ch_first(x).astype(np.float32, copy=False)
-    enhanced = np.zeros_like(x, dtype=np.float32)
+def psychoacoustic_enhancer_lowmem(src, dst, sr, strength=1.0, progress_cb=None, abort_cb=None):
+    src = ensure_ch_first(src)
     scale = float(np.clip(strength, 0.3, 1.5))
 
     critical_bands = [
@@ -510,54 +615,51 @@ def psychoacoustic_enhancer(x, sr, strength=1.0, progress_cb=None, abort_cb=None
         {"freq": 10000, "boost": 1.0 * scale, "q": 0.8},
     ]
 
-    for ch in range(x.shape[0]):
+    for ch in range(src.shape[0]):
         if abort_cb and abort_cb():
             break
-        channel_enhanced = x[ch].copy()
+
+        x_ch = np.asarray(src[ch], dtype=np.float32)
+        channel_enhanced = np.array(x_ch, dtype=np.float32, copy=True)
+
         for i, band in enumerate(critical_bands):
             if abort_cb and abort_cb():
                 break
             if progress_cb:
-                progress = int((i + ch * len(critical_bands)) * 100 / (len(critical_bands) * x.shape[0]))
+                progress = int((i + ch * len(critical_bands)) * 100 / (len(critical_bands) * src.shape[0]))
                 progress_cb(progress, f"Psychoacoustic enhancement at {band['freq']}Hz")
+
             if band["freq"] >= sr // 2:
                 continue
+
             try:
                 b, a = design_peaking_eq(freq=band["freq"], gain_db=band["boost"], q=band["q"], sr=sr)
-                filtered = filtfilt_np(b, a, x[ch])
-                filtered = sanitize_audio(filtered, fallback=x[ch])
+                filtered = filtfilt_np(b, a, x_ch)
+                filtered = sanitize_audio(filtered, fallback=x_ch)
                 blend_factor = 0.22
                 channel_enhanced = channel_enhanced * (1.0 - blend_factor) + filtered * blend_factor
             except Exception:
                 continue
-        enhanced[ch] = sanitize_audio(channel_enhanced, fallback=x[ch])
-    return enhanced
+
+        dst[ch, :] = sanitize_audio(channel_enhanced, fallback=x_ch)
+
+    dst.flush()
 
 
-def stereo_width_enhancer(x, width_factor=1.15):
-    x = ensure_ch_first(x).astype(np.float32, copy=False)
-    if x.shape[0] != 2:
-        return x
-    left, right = x[0], x[1]
-    mid = (left + right) / 2.0
-    side = (left - right) / 2.0
-    side_enhanced = side * float(np.clip(width_factor, 1.0, 1.8))
-    return np.array([mid + side_enhanced, mid - side_enhanced], dtype=np.float32)
-
-
-def dynamic_range_enhancer(x, ratio=1.12, attack_ms=5, release_ms=50, sr=44100):
-    x = ensure_ch_first(x).astype(np.float32, copy=False)
+def dynamic_range_enhancer_lowmem(src, dst, ratio=1.12, attack_ms=5, release_ms=50, sr=44100):
+    src = ensure_ch_first(src)
     attack_samples = max(1, int(attack_ms * sr / 1000))
     release_samples = max(1, int(release_ms * sr / 1000))
-    enhanced = np.zeros_like(x, dtype=np.float32)
 
-    for ch in range(x.shape[0]):
-        signal_ch = x[ch]
-        envelope = np.abs(signal_ch)
+    for ch in range(src.shape[0]):
+        x_ch = np.asarray(src[ch], dtype=np.float32)
+        envelope = np.abs(x_ch)
         smoothed_env = np.zeros_like(envelope)
+
         if len(envelope) == 0:
-            enhanced[ch] = signal_ch
+            dst[ch, :] = x_ch
             continue
+
         current_env = envelope[0]
         for i in range(len(envelope)):
             if envelope[i] > current_env:
@@ -565,99 +667,180 @@ def dynamic_range_enhancer(x, ratio=1.12, attack_ms=5, release_ms=50, sr=44100):
             else:
                 current_env -= (current_env - envelope[i]) / release_samples
             smoothed_env[i] = current_env
+
         threshold = 0.08
         gain = np.ones_like(smoothed_env)
         above = smoothed_env > threshold
         gain[above] = (smoothed_env[above] / threshold) ** (ratio - 1.0)
         gain = np.clip(gain, 1.0, 1.8)
-        enhanced[ch] = signal_ch * gain
-    return sanitize_audio(enhanced, fallback=x)
+
+        out = x_ch * gain
+        dst[ch, :] = sanitize_audio(out, fallback=x_ch)
+
+    dst.flush()
 
 
-def enhanced_audio_algorithm(
-    x: np.ndarray,
-    sr: int,
+def stereo_width_enhancer_lowmem(src, dst, width_factor=1.15):
+    src = ensure_ch_first(src)
+
+    if src.shape[0] != 2:
+        dst[:] = src[:]
+        dst.flush()
+        return
+
+    left = np.array(src[0], dtype=np.float32, copy=True)
+    right = np.array(src[1], dtype=np.float32, copy=True)
+
+    mid = (left + right) / 2.0
+    side = (left - right) / 2.0
+    side_enhanced = side * float(np.clip(width_factor, 1.0, 1.8))
+
+    dst[0, :] = mid + side_enhanced
+    dst[1, :] = mid - side_enhanced
+    dst.flush()
+
+
+def final_blend_lowmem(orig, processed, dst, enhancement_strength=0.7):
+    blend_factor = float(np.clip(enhancement_strength, 0.1, 0.8))
+
+    for ch in range(orig.shape[0]):
+        x_ch = np.array(orig[ch], dtype=np.float32, copy=False)
+        p_ch = np.array(processed[ch], dtype=np.float32, copy=False)
+
+        if audio_peak(p_ch) < 1e-10:
+            out = np.array(x_ch, dtype=np.float32, copy=True)
+        else:
+            out = x_ch * (1.0 - blend_factor) + p_ch * blend_factor
+
+        out = sanitize_audio(out, fallback=x_ch)
+        dst[ch, :] = out
+
+    peak = 0.0
+    for ch in range(dst.shape[0]):
+        peak = max(peak, float(np.max(np.abs(dst[ch]))))
+
+    if peak > 0.95:
+        scale = 0.95 / peak
+        for ch in range(dst.shape[0]):
+            dst[ch, :] = dst[ch, :] * scale
+
+    dst.flush()
+
+
+def enhanced_audio_algorithm_memmap(
+    mm_y,
+    sr,
+    temp_dir=None,
     enhancement_strength: float = 0.7,
     harmonic_intensity: float = 0.6,
     stereo_width: float = 1.15,
     dynamic_enhancement: float = 1.12,
+    use_psycho: bool = True,
     progress_cb=None,
     abort_cb=None,
-) -> np.ndarray:
-    x = ensure_ch_first(x)
-    x = sanitize_audio(x)
+):
+    shape = mm_y.shape
 
-    if x is None or x.size == 0:
-        raise ValueError("Input audio data is empty or None")
-    if audio_peak(x) < 1e-10:
-        raise ValueError("Input audio data appears to be silent")
-
-    if progress_cb:
-        progress_cb(0, "Starting enhancement process")
+    mm_enh, enh_path = create_audio_memmap(shape, dtype=np.float32, dir=temp_dir)
+    mm_psy, psy_path = create_audio_memmap(shape, dtype=np.float32, dir=temp_dir)
+    mm_dyn, dyn_path = create_audio_memmap(shape, dtype=np.float32, dir=temp_dir)
+    mm_out, out_path = create_audio_memmap(shape, dtype=np.float32, dir=temp_dir)
+    mm_final, final_path = create_audio_memmap(shape, dtype=np.float32, dir=temp_dir)
 
     if progress_cb:
-        progress_cb(10, "Applying multi-band harmonic excitement")
-    enhanced = multiband_exciter(
-        x, sr,
+        progress_cb(0, "Applying multi-band harmonic excitement")
+
+    multiband_exciter_lowmem(
+        mm_y,
+        mm_enh,
+        sr,
         harmonic_intensity=harmonic_intensity,
-        progress_cb=lambda p, desc: progress_cb(10 + p // 4, desc) if progress_cb else None,
+        progress_cb=(lambda p, desc: progress_cb(5 + int(p * 0.45), desc)) if progress_cb else None,
         abort_cb=abort_cb,
     )
-    enhanced = sanitize_audio(enhanced, fallback=x)
+
     if abort_cb and abort_cb():
-        return x
-    USE_PSYCHO = False  # 高速化用
-    if USE_PSYCHO:
+        return mm_y, {
+            "enh_path": enh_path,
+            "psy_path": psy_path,
+            "dyn_path": dyn_path,
+            "out_path": out_path,
+            "final_path": final_path,
+        }
+
+    if use_psycho:
         if progress_cb:
-            progress_cb(35, "Applying psychoacoustic enhancement")
-        psycho_enhanced = psychoacoustic_enhancer(
-            enhanced, sr,
+            progress_cb(50, "Applying psychoacoustic enhancement")
+
+        psychoacoustic_enhancer_lowmem(
+            mm_enh,
+            mm_psy,
+            sr,
             strength=enhancement_strength,
-            progress_cb=lambda p, desc: progress_cb(35 + p // 4, desc) if progress_cb else None,
+            progress_cb=(lambda p, desc: progress_cb(50 + int(p * 0.20), desc)) if progress_cb else None,
             abort_cb=abort_cb,
         )
     else:
-        psycho_enhanced = enhanced
-
-    psycho_enhanced = sanitize_audio(psycho_enhanced, fallback=x)
+        mm_psy[:] = mm_enh[:]
+        mm_psy.flush()
 
     if abort_cb and abort_cb():
-        return x
+        return mm_y, {
+            "enh_path": enh_path,
+            "psy_path": psy_path,
+            "dyn_path": dyn_path,
+            "out_path": out_path,
+            "final_path": final_path,
+        }
 
     if progress_cb:
-        progress_cb(60, "Enhancing dynamic range")
-    dynamic_enhanced = dynamic_range_enhancer(
-        psycho_enhanced,
+        progress_cb(72, "Enhancing dynamic range")
+
+    dynamic_range_enhancer_lowmem(
+        mm_psy,
+        mm_dyn,
         ratio=float(np.clip(dynamic_enhancement, 1.0, 1.5)),
         sr=sr,
     )
-    dynamic_enhanced = sanitize_audio(dynamic_enhanced, fallback=x)
+
     if abort_cb and abort_cb():
-        return x
+        return mm_y, {
+            "enh_path": enh_path,
+            "psy_path": psy_path,
+            "dyn_path": dyn_path,
+            "out_path": out_path,
+            "final_path": final_path,
+        }
 
     if progress_cb:
-        progress_cb(75, "Enhancing stereo width")
-    stereo_enhanced = stereo_width_enhancer(dynamic_enhanced, stereo_width) if x.shape[0] == 2 else dynamic_enhanced
-    stereo_enhanced = sanitize_audio(stereo_enhanced, fallback=x)
+        progress_cb(82, "Enhancing stereo width")
+
+    stereo_width_enhancer_lowmem(mm_dyn, mm_out, width_factor=stereo_width)
+
     if abort_cb and abort_cb():
-        return x
+        return mm_y, {
+            "enh_path": enh_path,
+            "psy_path": psy_path,
+            "dyn_path": dyn_path,
+            "out_path": out_path,
+            "final_path": final_path,
+        }
 
     if progress_cb:
-        progress_cb(90, "Final processing and normalization")
-    if audio_peak(stereo_enhanced) < 1e-10:
-        final = x.copy()
-    else:
-        blend_factor = float(np.clip(enhancement_strength, 0.1, 0.8))
-        final = x * (1.0 - blend_factor) + stereo_enhanced * blend_factor
-    final = sanitize_audio(final, fallback=x)
-    peak = audio_peak(final)
-    if peak > 0.95:
-        final *= 0.95 / peak
-    if audio_peak(final) < 1e-10:
-        final = x.copy()
+        progress_cb(90, "Final blending and normalization")
+
+    final_blend_lowmem(mm_y, mm_out, mm_final, enhancement_strength=enhancement_strength)
+
     if progress_cb:
         progress_cb(100, "Enhancement complete")
-    return sanitize_audio(final, fallback=x)
+
+    return mm_final, {
+        "enh_path": enh_path,
+        "psy_path": psy_path,
+        "dyn_path": dyn_path,
+        "out_path": out_path,
+        "final_path": final_path,
+    }
 
 class DragDropListWidget(QtWidgets.QListWidget):
     def __init__(self, parent=None):
@@ -707,7 +890,6 @@ class DragDropListWidget(QtWidgets.QListWidget):
             self.addItem(self.placeholder_item)
         event.acceptProposedAction()
 
-
 class DSREWorker(QtCore.QThread):
     sig_log = QtCore.Signal(str)
     sig_file_progress = QtCore.Signal(int, int, str)
@@ -716,7 +898,7 @@ class DSREWorker(QtCore.QThread):
     sig_file_done = QtCore.Signal(str, str)
     sig_error = QtCore.Signal(str, str)
     sig_finished = QtCore.Signal()
-    sig_retry_available = QtCore.Signal(str, str)
+    sig_retry_available = QtCore.Signal(str, str, str)  # in_path, fname, err
     sig_processing_stats = QtCore.Signal(dict)
 
     def __init__(self, files, output_dir, params, parent=None):
@@ -746,81 +928,6 @@ class DSREWorker(QtCore.QThread):
 
     def estimate_processing_time(self, file_size_mb: float) -> float:
         return max(1.0, file_size_mb * 0.5)
-
-    def process_audio_chunked(self, y: np.ndarray, sr: int, chunk_seconds: float = 10.0, overlap_seconds: float = 0.05) -> np.ndarray:
-        if y.ndim == 1:
-            y = y[np.newaxis, :]
-
-        total_samples = y.shape[1]
-        chunk_size = max(2048, int(sr * chunk_seconds))
-        overlap = max(256, int(sr * overlap_seconds))
-
-        if total_samples <= chunk_size:
-            return enhanced_audio_algorithm(
-                y, sr,
-                enhancement_strength=float(self.params["decay"]),
-                harmonic_intensity=float(self.params["m"]) / 16.0,
-                stereo_width=1.15,
-                dynamic_enhancement=1.12,
-                progress_cb=None,
-                abort_cb=lambda: self._abort,
-            )
-
-        out = np.zeros_like(y, dtype=np.float32)
-        weight = np.zeros((1, total_samples), dtype=np.float32)
-        step = max(1, chunk_size - overlap)
-
-        for start in range(0, total_samples, step):
-            if self._abort:
-                break
-            end = min(total_samples, start + chunk_size)
-            chunk = y[:, start:end]
-            if chunk.size == 0:
-                continue
-
-            processed_chunk = enhanced_audio_algorithm(
-                chunk, sr,
-                enhancement_strength=float(self.params["decay"]),
-                harmonic_intensity=float(self.params["m"]) / 16.0,
-                stereo_width=1.15,
-                dynamic_enhancement=1.12,
-                progress_cb=None,
-                abort_cb=lambda: self._abort,
-            )
-
-            chunk_len = processed_chunk.shape[1]
-            fade = np.ones(chunk_len, dtype=np.float32)
-            if start > 0:
-                fade_in = min(overlap, chunk_len)
-                fade[:fade_in] = np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
-            if end < total_samples:
-                fade_out = min(overlap, chunk_len)
-                fade[-fade_out:] = np.minimum(fade[-fade_out:], np.linspace(1.0, 0.0, fade_out, dtype=np.float32))
-
-            out[:, start:end] += processed_chunk * fade[np.newaxis, :]
-            weight[:, start:end] += fade[np.newaxis, :]
-
-        weight[weight == 0] = 1.0
-        return (out / weight).astype(np.float32)
-
-    def load_audio_with_recovery(self, file_path: str, target_sr: int):
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-
-        try:
-            DEBUG_PROBE = False
-            if DEBUG_PROBE:
-                info = ffprobe_audio_info(file_path)
-                self.sig_log.emit(f"Source info: codec={info.get('codec_name', '')}, sr={info.get('sample_rate', 0)}Hz, ch={info.get('channels', 0)}, dur={info.get('duration', 0):.2f}s")
-        except Exception as probe_err:
-            self.sig_log.emit(f"FFprobe warning: {probe_err}")
-
-        self.sig_log.emit(f"Loading audio via FFmpeg: {os.path.basename(file_path)}")
-        y, sr = load_audio_ffmpeg(file_path, target_sr=target_sr)
-        if y is None or y.size == 0:
-            raise ValueError("Empty audio data loaded")
-        self.sig_log.emit(f"Loaded successfully: {y.shape}, {sr}Hz")
-        return y, sr
 
     def categorize_error(self, error: Exception) -> str:
         error_str = str(error).lower()
@@ -859,70 +966,113 @@ class DSREWorker(QtCore.QThread):
             max_retries = 3
 
             while retry_count <= max_retries:
+                mm_y = None
+                mm_y_path = None
+                wav_path = None
+                buf_paths = {}
+                out_path = None
+
                 try:
+                    if not os.path.exists(in_path):
+                        raise FileNotFoundError(f"Input file not found: {in_path}")
+
+                    work_dir = get_work_dir()
                     target_sr = int(self.params["target_sr"])
-                    y, sr = self.load_audio_with_recovery(in_path, target_sr=target_sr)
-                    if y.ndim == 1:
-                        y = y[np.newaxis, :]
 
-                    def step_cb(cur, desc):
-                        self.sig_step_progress.emit(int(cur), fname)
+                    # probe はログ用途なので失敗しても続行
+                    try:
+                        DEBUG_PROBE = False
+                        if DEBUG_PROBE:
+                            info = ffprobe_audio_info(in_path)
+                            self.sig_log.emit(
+                                f"Source info: codec={info.get('codec_name', '')}, "
+                                f"sr={info.get('sample_rate', 0)}Hz, "
+                                f"ch={info.get('channels', 0)}, "
+                                f"dur={info.get('duration', 0):.2f}s"
+                            )
+                    except Exception as probe_err:
+                        self.sig_log.emit(f"FFprobe warning: {probe_err}")
 
-                    self.sig_log.emit(f"Input audio shape: {y.shape}, sample rate: {sr} Hz")
-                    self.sig_log.emit(f"Input audio range: {np.min(y):.4f} to {np.max(y):.4f}")
-                    self.sig_log.emit(f"Input audio RMS: {audio_rms(y):.6f}")
-                    self.sig_log.emit(f"Enhancement parameters: strength={self.params['decay']}, harmonics={self.params['m']}")
+                    self.sig_log.emit(f"Decoding to temp wav + memmap: {fname}")
+                    self.sig_step_progress.emit(5, fname)
 
-                    if audio_peak(y) < 1e-10:
+                    mm_y, sr, mm_y_path, wav_path = load_audio_to_memmap(
+                        in_path,
+                        target_sr=target_sr,
+                        temp_dir=work_dir,
+                        blocksize=MEMMAP_BLOCK_FRAMES,
+                    )
+
+                    self.sig_log.emit(f"Loaded to memmap successfully: shape={mm_y.shape}, sr={sr}Hz")
+                    self.sig_step_progress.emit(15, fname)
+
+                    if audio_peak(mm_y) < 1e-10:
                         raise RuntimeError("Input audio file appears to be silent or corrupted")
 
-                    if file_size_mb > 150:
-                        self.sig_log.emit(f"Using chunked processing for large file: {fname}")
-                        y_out = self.process_audio_chunked(y, sr)
-                    else:
-                        self.sig_log.emit("Starting Enhanced Audio Processing...")
-                        y_out = enhanced_audio_algorithm(
-                            y, sr,
-                            enhancement_strength=float(self.params["decay"]),
-                            harmonic_intensity=float(self.params["m"]) / 16.0,
-                            stereo_width=1.15,
-                            dynamic_enhancement=1.12,
-                            progress_cb=step_cb,
-                            abort_cb=lambda: self._abort,
-                        )
+                    self.sig_log.emit("Starting low-memory enhancement...")
+                    def step_cb(cur, desc):
+                        # enhancement フェーズ全体を 15%〜85% に割り当てる
+                        mapped = 15 + int(cur * 0.70)
+                        self.sig_step_progress.emit(mapped, fname)
+                        self.sig_log.emit(f"[Enhance] {desc} ({mapped}%)")
 
-                    self.sig_log.emit(f"Output audio shape: {y_out.shape}, sample rate: {sr} Hz")
-                    self.sig_log.emit(f"Output audio range: {np.min(y_out):.4f} to {np.max(y_out):.4f}")
-                    self.sig_log.emit(f"Output audio RMS: {audio_rms(y_out):.6f}")
+                    final_mm, buf_paths = enhanced_audio_algorithm_memmap(
+                        mm_y,
+                        sr,
+                        temp_dir=work_dir,
+                        enhancement_strength=float(self.params["decay"]),
+                        harmonic_intensity=float(self.params["m"]) / 16.0,
+                        stereo_width=1.15,
+                        dynamic_enhancement=1.12,
+                        use_psycho=True,
+                        progress_cb=step_cb,
+                        abort_cb=lambda: self._abort,
+                    )
 
-                    if audio_peak(y_out) < 1e-10:
-                        self.sig_log.emit("ERROR: Output audio is silent! Using original audio instead.")
-                        y_out = y.copy()
+                    if audio_peak(final_mm) < 1e-10:
+                        self.sig_log.emit("WARNING: Output audio is silent. Falling back to original memmap.")
+                        final_mm[:] = mm_y[:]
+                        final_mm.flush()
 
-                    if y.shape == y_out.shape:
-                        diff = np.abs(y_out - y)
-                        max_diff = float(np.max(diff))
-                        mean_diff = float(np.mean(diff))
-                        rms_original = audio_rms(y)
-                        rms_enhanced = audio_rms(y_out)
+                    if ENABLE_DIFF_LOG and mm_y.shape == final_mm.shape:
+                        diff_max = 0.0
+                        diff_sum = 0.0
+                        total_count = 0
+                        for ch in range(mm_y.shape[0]):
+                            diff = np.abs(final_mm[ch] - mm_y[ch])
+                            diff_max = max(diff_max, float(np.max(diff)))
+                            diff_sum += float(np.sum(diff))
+                            total_count += diff.size
+                        mean_diff = diff_sum / max(1, total_count)
+                        rms_original = audio_rms(mm_y)
+                        rms_enhanced = audio_rms(final_mm)
                         enhancement_ratio = rms_enhanced / (rms_original + 1e-12)
                         self.sig_log.emit("Enhancement Results:")
-                        self.sig_log.emit(f"  Max difference: {max_diff:.6f}")
+                        self.sig_log.emit(f"  Max difference: {diff_max:.6f}")
                         self.sig_log.emit(f"  Mean difference: {mean_diff:.6f}")
                         self.sig_log.emit(f"  RMS enhancement ratio: {enhancement_ratio:.3f}")
-                        if max_diff < 0.001:
-                            self.sig_log.emit("WARNING: Very small enhancement detected!")
-                        else:
-                            self.sig_log.emit("SUCCESS: Significant audio enhancement applied!")
 
                     os.makedirs(self.output_dir, exist_ok=True)
                     base, _ = os.path.splitext(fname)
                     out_ext = {'ALAC': 'm4a', 'FLAC': 'flac', 'MP3': 'mp3'}.get(self.params['format'], 'm4a')
                     out_path = os.path.join(self.output_dir, f"{base}_enhanced.{out_ext}")
-                    out_path = save_with_metadata(in_path, y_out, sr, out_path, fmt=self.params['format'])
 
+                    self.sig_log.emit("Saving output from memmap...")
+                    out_path = save_with_metadata_from_memmap(
+                        in_path,
+                        final_mm,
+                        sr,
+                        out_path,
+                        fmt=self.params['format'],
+                        normalize=True,
+                        temp_dir=work_dir,
+                        blocksize=MEMMAP_BLOCK_FRAMES,
+                    )
+
+                    self.sig_step_progress.emit(100, fname)
                     self.sig_log.emit(f"File saved: {out_path}")
                     self.sig_file_done.emit(in_path, out_path)
+
                     self.processing_stats['processed_files'] += 1
                     self.processing_stats['processed_size_mb'] += file_size_mb
                     break
@@ -931,6 +1081,7 @@ class DSREWorker(QtCore.QThread):
                     err = "".join(traceback.format_exception_only(type(e), e)).strip()
                     retry_count += 1
                     error_type = self.categorize_error(e)
+
                     if retry_count <= max_retries and error_type != "fatal":
                         self.sig_log.emit(f"[Retry {retry_count}/{max_retries}] {fname}: {err}")
                         time.sleep(2 if error_type in ("io", "ffmpeg") else 1)
@@ -939,21 +1090,30 @@ class DSREWorker(QtCore.QThread):
                         self.sig_log.emit(f"[Error] {fname}: {err}")
                         self.processing_stats['failed_files'] += 1
                         if error_type != "fatal":
-                            self.sig_retry_available.emit(fname, err)
+                            self.sig_retry_available.emit(in_path, fname, err)
                         break
+
+                finally:
+                    cleanup_files(
+                        mm_y_path,
+                        wav_path,
+                        buf_paths.get("enh_path"),
+                        buf_paths.get("psy_path"),
+                        buf_paths.get("dyn_path"),
+                        buf_paths.get("out_path"),
+                        buf_paths.get("final_path"),
+                    )
 
             done += 1
             self.sig_overall_progress.emit(done, total)
-            self.sig_step_progress.emit(100, fname)
             self.sig_processing_stats.emit(self.processing_stats.copy())
 
         self.sig_finished.emit()
 
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(self.tr("DSRE v3.0"))
+        self.setWindowTitle(self.tr("DSRE v3.2"))
         icon_path = os.path.join(os.path.dirname(__file__), "logo.png")
         self.setWindowIcon(QIcon(icon_path))
         self.resize(1200, 800)
@@ -961,7 +1121,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dark_mode = False
         self.recent_files = []
         self.max_recent_files = 10
-        self.failed_files = []
+        self.failed_files = []  # full path を保持
         self.worker: Optional[DSREWorker] = None
         self.config_file = os.path.join(os.path.dirname(__file__), "dsre_enhanced_config.json")
 
@@ -970,7 +1130,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.create_menu_bar()
 
         self.status_bar = self.statusBar()
-        self.status_bar.showMessage(self.tr("Ready - SciPy-Free Audio Processing Algorithm Loaded"))
+        self.status_bar.showMessage(self.tr("Ready - Low-memory memmap processing loaded"))
 
         self.list_files = DragDropListWidget()
         self.list_files.setToolTip(self.tr("Drag and drop audio files here for enhancement processing"))
@@ -998,13 +1158,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sb_sr = QtWidgets.QSpinBox()
         self.sb_sr.setRange(44100, 192000)
         self.sb_sr.setSingleStep(22050)
-        self.sb_sr.setValue(96000)
+        self.sb_sr.setValue(96000)  # 元の音の条件を維持
         self.sb_sr.setToolTip(self.tr("Target sample rate: Uses FFmpeg resampling during loading"))
 
         self.pb_file = QtWidgets.QProgressBar()
         self.pb_all = QtWidgets.QProgressBar()
         self.lbl_now = QtWidgets.QLabel(self.tr("Control"))
-        self.lbl_stats = QtWidgets.QLabel(self.tr("Ready to process - SciPy-Free Algorithm Active"))
+        self.lbl_stats = QtWidgets.QLabel(self.tr("Ready to process - Low-memory memmap mode"))
         self.lbl_stats.setStyleSheet("QLabel { color: #666; font-size: 10px; }")
         self.lbl_eta = QtWidgets.QLabel("")
         self.lbl_eta.setStyleSheet("QLabel { color: #666; font-size: 10px; }")
@@ -1121,19 +1281,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.le_outdir.textChanged.connect(self.save_config)
         self.cb_format.currentTextChanged.connect(self.save_config)
 
-        self.append_log("DSRE v3.0 - SciPy-Free Audio Processing Suite")
+        self.append_log("DSRE v3.1 - Low-memory memmap integrated")
         self.append_log("=" * 60)
-        self.append_log(self.tr("NEW FEATURES:"))
-        self.append_log(self.tr("• SciPy removed completely"))
-        self.append_log(self.tr("• librosa removed completely"))
-        self.append_log(self.tr("• resampy removed completely"))
-        self.append_log(self.tr("• FFmpeg-based loading and resampling"))
-        self.append_log(self.tr("• NumPy-only filtering and EQ"))
-        self.append_log(self.tr("• Crossfaded chunked processing for large files"))
+        self.append_log(self.tr("FEATURES:"))
+        self.append_log(self.tr("• Long-lived large arrays moved to numpy.memmap"))
+        self.append_log(self.tr("• Decode -> temp wav -> memmap"))
+        self.append_log(self.tr("• Full-path retry support"))
         self.append_log("=" * 60)
-        self.append_log(self.tr("Software by: Qu Le Fan (Enhanced by AI)"))
-        self.append_log(self.tr("Feedback: Le_Fan_Qv@outlook.com"))
-        self.append_log(self.tr("Discussion Group: 323861356 (QQ)"))
         self.append_log(self.tr("Ready for enhanced audio processing!"))
 
         self.apply_theme()
@@ -1246,21 +1400,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def show_about(self):
         text = self.tr(
-            "DSRE v3.0 - SciPy-Free Audio Processing Suite\n\n"
-            "Enhanced with multi-band harmonic excitement,\n"
-            "psychoacoustic enhancement, dynamic range processing,\n"
-            "and FFmpeg-based decoding/resampling.\n\n"
+            "DSRE v3.1 - Low-memory memmap integrated\n\n"
+            "Large long-lived arrays are stored on disk with numpy.memmap.\n"
+            "The DSP chain remains the same, but the processing model is more memory-conscious.\n\n"
             "Features:\n"
-            "• SciPy removed completely\n"
-            "• librosa removed completely\n"
-            "• resampy removed completely\n"
-            "• FFmpeg-based loading / resampling\n"
-            "• NumPy-only filtering / EQ\n"
-            "• Crossfaded chunked processing for large files\n\n"
-            "Original Software by: Qu Le Fan\n"
-            "Enhanced Algorithm by: AI Assistant\n"
-            "Feedback: Le_Fan_Qv@outlook.com\n"
-            "Discussion Group: 323861356 (QQ)"
+            "• numpy.memmap for long-lived buffers\n"
+            "• soundfile block-based loading into memmap\n"
+            "• full-path retry support\n"
+            "• shell=True removed from subprocess calls\n"
         )
         QtWidgets.QMessageBox.about(self, self.tr("About DSRE Enhanced"), text)
 
@@ -1300,7 +1447,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pb_all.setValue(0)
         self.pb_file.setValue(0)
         self.te_log.clear()
-        self.append_log(self.tr("DSRE v3.0 - SciPy-Free Audio Processing Suite"))
+        self.failed_files.clear()
+        self.append_log(self.tr("DSRE v3.1 - Low-memory memmap integrated"))
         self.append_log(self.tr("Ready for enhanced audio processing!"))
         self.update_button_states()
 
@@ -1458,16 +1606,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_error(self, fname, err):
         self.append_log(self.tr(f"[Error] {fname}: {err}"))
 
-    @QtCore.Slot(str, str)
-    def on_retry_available(self, fname, err):
-        if fname not in self.failed_files:
-            self.failed_files.append(fname)
+    @QtCore.Slot(str, str, str)
+    def on_retry_available(self, in_path, fname, err):
+        if in_path not in self.failed_files:
+            self.failed_files.append(in_path)
         self.btn_retry.setEnabled(True)
         self.append_log(self.tr(f"[Retry Available] {fname}: {err}"))
 
     def on_retry_failed(self):
         if not self.failed_files:
             return
+
         self.append_log(self.tr(f"Retrying enhanced processing for {len(self.failed_files)} failed files..."))
         self.pb_all.setValue(0)
         self.pb_file.setValue(0)
@@ -1476,7 +1625,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cancel.setEnabled(True)
         self.btn_retry.setEnabled(False)
 
-        self.worker = DSREWorker(self.failed_files, self.le_outdir.text().strip() or os.path.abspath("enhanced_output"), self.params())
+        self.worker = DSREWorker(
+            self.failed_files,
+            self.le_outdir.text().strip() or os.path.abspath("enhanced_output"),
+            self.params(),
+        )
         self.worker.sig_log.connect(self.append_log)
         self.worker.sig_file_progress.connect(self.on_file_progress)
         self.worker.sig_step_progress.connect(self.on_step_progress)
@@ -1547,11 +1700,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = None
         self.update_button_states()
 
-
 def main():
+    multiprocessing.freeze_support()
+
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.lefanqv.dsre.enhanced.scipyfree")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.lefanqv.dsre.enhanced.scipyfree.lowmem")
     except Exception:
         pass
 
@@ -1571,6 +1725,6 @@ def main():
     w.show()
     sys.exit(app.exec())
 
-
 if __name__ == "__main__":
     main()
+
