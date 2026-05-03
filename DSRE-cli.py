@@ -68,7 +68,6 @@ def _run_subprocess(
     result = subprocess.run(
         cmd,
         check=False,
-        shell=True,
         stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
         stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
     )
