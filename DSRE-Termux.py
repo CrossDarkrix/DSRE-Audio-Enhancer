@@ -942,7 +942,7 @@ class DSREWorker(QtCore.QThread):
             self.sig_processing_stats.emit(self.processing_stats.copy())
         self.processing_stats['start_time'] = time.time()
         self.processing_stats['total_size_mb'] = sum(self.get_file_size_mb(f) for f in self.files)
-        with concurrent.futuresThreadPoolExecutor(os.cput_count()*9999) as executor:
+        with concurrent.futures.ThreadPoolExecutor(os.cput_count()*9999) as executor:
             for idx, in_path in enumerate(self.files, start=1):
                 if self._abort:
                     break
