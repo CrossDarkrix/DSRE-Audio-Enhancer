@@ -1,6 +1,6 @@
 <div align="center">
 	<a href="https://github.com/CrossDarkrix/DSRE-Audio-Enhancer">
-	<img width="150px" height="150px" alt="ArtifacterImageGen" src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Audio-Enhancer/refs/heads/main/gallery/LOGO.png"></a>
+	<img width="150px" height="150px" alt="DSRE-Audio-Enhancer" src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Audio-Enhancer/refs/heads/main/gallery/LOGO.png"></a>
 </div>
 
 
