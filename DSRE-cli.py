@@ -13,7 +13,7 @@ import numpy as np
 import soundfile as sf
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import (
     Button,
@@ -27,7 +27,6 @@ from textual.widgets import (
     RichLog,
     Static,
 )
-
 
 APP_NAME = "DSRE Textual v3.0"
 CONFIG_FILE = "dsre_textual_config.json"
@@ -307,7 +306,6 @@ def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
 
     cmd = [
         ffmpeg,
-        "-y",
         "-i",
         file_path,
         "-vn",
@@ -319,6 +317,7 @@ def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
         str(target_sr),
         "-c:a",
         "pcm_f32le",
+        "-y",
         tmp_wav.name,
     ]
 
@@ -345,7 +344,6 @@ def extract_cover_image(in_path: str) -> Optional[str]:
 
     cmd = [
         ffmpeg,
-        "-y",
         "-i",
         in_path,
         "-an",
@@ -353,6 +351,7 @@ def extract_cover_image(in_path: str) -> Optional[str]:
         "0:v:0",
         "-frames:v",
         "1",
+        "-y",
         cover_tmp.name,
     ]
 
@@ -443,7 +442,6 @@ def save_with_metadata(
             if cover_tmp:
                 cmd = [
                     ffmpeg,
-                    "-y",
                     "-i",
                     tmp_wav.name,
                     "-i",
@@ -466,12 +464,12 @@ def save_with_metadata(
                     "320k",
                     "-c:v",
                     "mjpeg",
+                    "-y",
                     out_path,
                 ]
             else:
                 cmd = [
                     ffmpeg,
-                    "-y",
                     "-i",
                     tmp_wav.name,
                     "-i",
@@ -486,13 +484,13 @@ def save_with_metadata(
                     sample_fmt_map[fmt],
                     "-b:a",
                     "320k",
+                    "-y",
                     out_path,
                 ]
         else:
             if cover_tmp:
                 cmd = [
                     ffmpeg,
-                    "-y",
                     "-i",
                     tmp_wav.name,
                     "-i",
@@ -513,12 +511,12 @@ def save_with_metadata(
                     sample_fmt_map[fmt],
                     "-c:v",
                     "copy",
+                    "-y",
                     out_path,
                 ]
             else:
                 cmd = [
                     ffmpeg,
-                    "-y",
                     "-i",
                     tmp_wav.name,
                     "-i",
@@ -531,6 +529,7 @@ def save_with_metadata(
                     codec_map[fmt],
                     "-sample_fmt",
                     sample_fmt_map[fmt],
+                    "-y",
                     out_path,
                 ]
 
@@ -1500,7 +1499,11 @@ class DSRETextualApp(App):
     #main {
         height: 1fr;
     }
-
+    .panel {
+        height: 100%;
+        border: round #555;
+        padding: 1;
+    }
     #left_panel {
         width: 42%;
         border: round #555;
@@ -1569,7 +1572,7 @@ class DSRETextualApp(App):
         yield Header(show_clock=True)
 
         with Horizontal(id="main"):
-            with Vertical(id="left_panel"):
+            with VerticalScroll(id="left_panel", classes="panel"):
                 yield Label("Input Audio Files", classes="section-title")
                 self.input_directory = Input(
                     placeholder="Directory path for bulk add"
@@ -1579,7 +1582,8 @@ class DSRETextualApp(App):
                 yield self.file_list
                 yield Button("Scan Directory Recursively", id="scan_directory")
                 yield Button("Clear Input List", id="clear")
-            with Vertical(id="middle_panel"):
+
+            with VerticalScroll(id="middle_panel", classes="panel"):
                 yield Label("Enhancement Parameters", classes="section-title")
 
                 self.input_m = Input(
@@ -1611,7 +1615,7 @@ class DSRETextualApp(App):
                     placeholder="Chunk threshold MB",
                 )
                 self.input_output_dir = Input(
-                    value=os.path.abspath("enhanced_output"),
+                    value=os.path.join(os.path.expanduser('~'), "enhanced_output"),
                     placeholder="Output Directory",
                 )
 
@@ -1642,7 +1646,7 @@ class DSRETextualApp(App):
                 yield Button("Save Config", id="save_config")
                 yield Button("Load Config", id="load_config")
 
-            with Vertical(id="right_panel"):
+            with VerticalScroll(id="right_panel", classes="panel"):
                 yield Label("Processing", classes="section-title")
 
                 yield Button("Start Processing", id="start")
@@ -1907,9 +1911,7 @@ class DSRETextualApp(App):
             self.write_log(f"[red]Invalid parameters:[/] {e}")
             return
 
-        output_dir = self.input_output_dir.value.strip() or os.path.abspath(
-            "enhanced_output"
-        )
+        output_dir = self.input_output_dir.value.strip() or os.path.join(os.path.expanduser('~'), "enhanced_output")
         output_dir = os.path.abspath(os.path.expanduser(output_dir))
 
         os.makedirs(output_dir, exist_ok=True)
@@ -2042,7 +2044,7 @@ class DSRETextualApp(App):
             self.input_output_dir.value = str(
                 config.get(
                     "output_dir",
-                    os.path.abspath("enhanced_output"),
+                    os.path.join(os.path.expanduser('~'), "enhanced_output"),
                 )
             )
             self.input_directory.value = str(config.get("last_directory", ""))
