@@ -8,7 +8,7 @@
 
 ### Android版がリリースされました
 
-[Android版](https://github.com/CrossDarkrix/DSRE-Mobile)
+[Android版プロジェクトページ](https://github.com/CrossDarkrix/DSRE-Mobile)
 
 ## 説明 / Description
 
