@@ -6,7 +6,7 @@
 
 # [DSRE / Deep Sound Resolution Enhancer](https://github.com/Urabewe/DSRE---Digital-Sound-Resolution-Enhancer-English)の日本語化版
 
-# Android版がリリースされました
+### Android版がリリースされました
 
 [Android版](https://github.com/CrossDarkrix/DSRE-Mobile)
 
