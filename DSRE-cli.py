@@ -42,6 +42,7 @@ AUDIO_EXTENSIONS = {
     ".aac",
     ".wma",
     ".mka",
+    ".opus",
 }
 
 
@@ -1505,7 +1506,7 @@ class DSRETextualApp(App):
         padding: 1;
     }
     #left_panel {
-        width: 42%;
+        width: 40%;
         border: round #555;
         padding: 1;
     }
@@ -1517,7 +1518,7 @@ class DSRETextualApp(App):
     }
 
     #right_panel {
-        width: 28%;
+        width: 30%;
         border: round #555;
         padding: 1;
     }
@@ -1615,7 +1616,7 @@ class DSRETextualApp(App):
                     placeholder="Chunk threshold MB",
                 )
                 self.input_output_dir = Input(
-                    value=os.path.join(os.path.expanduser('~'), "enhanced_output"),
+                    value=os.path.join(os.path.expanduser('~'), "DSRE", "enhanced_output"),
                     placeholder="Output Directory",
                 )
 
@@ -1911,7 +1912,7 @@ class DSRETextualApp(App):
             self.write_log(f"[red]Invalid parameters:[/] {e}")
             return
 
-        output_dir = self.input_output_dir.value.strip() or os.path.join(os.path.expanduser('~'), "enhanced_output")
+        output_dir = self.input_output_dir.value.strip() or os.path.join(os.path.expanduser('~'), "DSRE", "enhanced_output")
         output_dir = os.path.abspath(os.path.expanduser(output_dir))
 
         os.makedirs(output_dir, exist_ok=True)
@@ -2044,7 +2045,7 @@ class DSRETextualApp(App):
             self.input_output_dir.value = str(
                 config.get(
                     "output_dir",
-                    os.path.join(os.path.expanduser('~'), "enhanced_output"),
+                    os.path.join(os.path.expanduser('~'), "DSRE", "enhanced_output"),
                 )
             )
             self.input_directory.value = str(config.get("last_directory", ""))
