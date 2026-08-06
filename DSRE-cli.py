@@ -1558,7 +1558,6 @@ class DSRETextualApp(App):
 
     def __init__(self):
         super().__init__()
-        self.input_file.value = ''
         self.files: List[str] = []
         self.failed_files: List[str] = []
         self.processor_task: Optional[asyncio.Task] = None
